@@ -1,0 +1,30 @@
+name: Live storage smoke
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  storage-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Wait for production and verify Blob write/list/delete
+        shell: bash
+        run: |
+          set -euo pipefail
+          URL="https://fidbachr.vercel.app/api/storage-health"
+          for i in $(seq 1 24); do
+            echo "Attempt $i: $URL"
+            BODY=$(curl -fsS --max-time 20 "$URL" || true)
+            echo "$BODY"
+            if echo "$BODY" | grep -q '"ok":true' && \
+               echo "$BODY" | grep -q '"write":true' && \
+               echo "$BODY" | grep -q '"delete":true'; then
+              echo "LIVE_STORAGE_SMOKE_PASS"
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "LIVE_STORAGE_SMOKE_FAIL"
+          exit 1
