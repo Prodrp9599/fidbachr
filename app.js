@@ -1,288 +1,540 @@
-const $ = (s) => document.querySelector(s);
-const $$ = (s) => [...document.querySelectorAll(s)];
-const STORAGE_KEY = 'fidbachr-loop1-state-v2';
+const $ = (s, root = document) => root.querySelector(s);
+const $$ = (s, root = document) => [...root.querySelectorAll(s)];
+const APP_KEY = 'fidbachr-zero-day-v1';
 
-const severity = {
-  blocker: { label: 'Blocker', color: '#ff5b63' },
-  major: { label: 'Major', color: '#ff9b4a' },
-  minor: { label: 'Minor', color: '#f3cd54' },
-  suggestion: { label: 'Suggestion', color: '#98a0ad' },
+const severityMap = {
+  blocker: { label: 'Blocker', tone: 'danger' },
+  major: { label: 'Major', tone: 'major' },
+  minor: { label: 'Minor', tone: 'minor' },
+  suggestion: { label: 'Suggestion', tone: 'muted' },
 };
 
-const demoState = {
+const freshState = () => ({
+  screen: 'home',
   role: 'reviewer',
-  pinMode: false,
+  review: null,
+  feedback: [],
+  activity: [],
+  currentSlide: 0,
   pendingPin: null,
-  comments: [
-    {
-      id: 1,
-      text: 'The opening pause feels long. Tighten this before the first line lands.',
-      severity: 'major', category: 'Editing', time: 3.6, status: 'open', pin: null,
-      replies: [{ author: 'Shashwat', role: 'creator', text: 'Got it. I can trim roughly 0.6s here.', at: Date.now() - 1000 * 60 * 18 }]
-    },
-    {
-      id: 2,
-      text: 'This statistic needs to be verified before we publish.',
-      severity: 'blocker', category: 'Content', time: 12.2, status: 'ready', pin: {x: 70, y: 24},
-      replies: [{ author: 'Shashwat', role: 'creator', text: 'Updated the copy from the source doc. Can you verify?', at: Date.now() - 1000 * 60 * 7 }]
-    },
-    {
-      id: 3,
-      text: 'Raise the subtitle slightly so it clears the platform UI.',
-      severity: 'minor', category: 'Design', time: 22.8, status: 'resolved', pin: {x: 50, y: 78},
-      replies: [{ author: 'Rohan', role: 'reviewer', text: 'Looks good now.', at: Date.now() - 1000 * 60 * 2 }]
-    },
-  ],
-  activity: [
-    { icon: '↻', copy: '<b>Shashwat</b> marked “This statistic needs to be verified…” ready for review.', at: Date.now() - 1000 * 60 * 7 },
-    { icon: '💬', copy: '<b>Shashwat</b> replied to an editing change.', at: Date.now() - 1000 * 60 * 18 },
-    { icon: '✓', copy: '<b>Rohan</b> resolved the subtitle position feedback.', at: Date.now() - 1000 * 60 * 2 },
-  ],
-  unread: 3,
-};
+  walkthroughDismissed: false,
+});
+
+let state = loadState();
+let mediaUrls = [];
+let mediaDuration = 0;
 
 function loadState() {
   try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
-    if (saved?.comments) return { ...demoState, ...saved };
+    const saved = JSON.parse(localStorage.getItem(APP_KEY));
+    if (saved && saved.version === 1) return { ...freshState(), ...saved.state, screen: saved.state?.review ? saved.state.screen : 'home' };
   } catch (_) {}
-  return structuredClone(demoState);
+  return freshState();
 }
-let state = loadState();
-let media = { type: null, duration: 30 };
 
-function save() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ role: state.role, comments: state.comments, activity: state.activity, unread: state.unread }));
+function persist() {
+  const safe = {
+    ...state,
+    review: state.review ? { ...state.review, files: [] } : null,
+  };
+  localStorage.setItem(APP_KEY, JSON.stringify({ version: 1, state: safe }));
 }
-function fmtTime(sec=0) {
-  const s = Math.max(0, Math.round(sec));
-  return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
-}
-function ago(ts) {
-  const m = Math.max(0, Math.round((Date.now()-ts)/60000));
-  if (m < 1) return 'just now';
-  if (m < 60) return `${m}m ago`;
-  const h = Math.round(m/60); return `${h}h ago`;
-}
-function escapeHtml(v='') {
-  return v.replace(/[&<>'"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#039;','"':'&quot;'}[c]));
-}
-function toast(msg) {
-  const el = $('#toast'); el.textContent = msg; el.classList.add('show');
-  clearTimeout(toast.t); toast.t = setTimeout(()=>el.classList.remove('show'), 1900);
-}
-function addActivity(icon, copy) {
-  state.activity.unshift({ icon, copy, at: Date.now() });
-  state.unread += 1; save(); renderActivity(); updateBadge();
-}
-function currentTime() { return media.type === 'video' ? ($('#video').currentTime || 0) : 0; }
-function currentDuration() { return media.type === 'video' ? ($('#video').duration || media.duration) : 1; }
 
-function renderAll() {
-  renderRole(); renderFeedback(); renderChecklist(); renderActivity(); renderTimeline(); renderPins(); updateProgress(); updateBadge();
+function toast(message) {
+  const el = $('#toast');
+  el.textContent = message;
+  el.classList.add('show');
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => el.classList.remove('show'), 1800);
 }
-function renderRole() {
-  $$('.role-btn').forEach(b => b.classList.toggle('active', b.dataset.role === state.role));
-  $('#finishBtn').textContent = state.role === 'reviewer' ? 'Finish review' : 'Notify reviewer';
-  $('#reviewerComposer').hidden = state.role !== 'reviewer';
-  $('#pinModeBtn').hidden = state.role !== 'reviewer';
-  if (state.role !== 'reviewer' && state.pinMode) { state.pinMode = false; state.pendingPin = null; }
-}
-function updateBadge() {
-  $('#activityBadge').textContent = state.unread;
-  $('#activityBadge').hidden = state.unread === 0;
-}
-function counts() {
-  const out = { blocker:0, major:0, minor:0, suggestion:0 };
-  state.comments.filter(c => c.status !== 'resolved').forEach(c => out[c.severity]++);
-  return out;
-}
-function renderFeedback() {
-  const status = $('#statusFilter').value;
-  const cat = $('#categoryFilter').value;
-  const list = state.comments
-    .filter(c => status === 'all' || c.status === status)
-    .filter(c => cat === 'all' || c.category === cat)
-    .sort((a,b) => a.time-b.time);
-  $('#feedbackCount').textContent = state.comments.length;
-  const cs = counts();
-  $('#summaryGrid').innerHTML = ['blocker','major','minor','suggestion'].map(k => `
-    <div class="summary-card"><div class="n" style="color:${severity[k].color}">${cs[k]}</div><div class="l">${severity[k].label}</div></div>`).join('');
 
-  const note = `<div class="role-note">${state.role === 'reviewer'
-    ? '<b>Reviewer mode:</b> you own priority and final resolution. Creators can mark changes ready for you.'
-    : '<b>Creator mode:</b> reply inside a change, start work, then mark it ready for reviewer verification.'}</div>`;
-
-  $('#feedbackList').innerHTML = note + (list.length ? list.map(cardHtml).join('') : '<div class="empty-list">No feedback matches these filters.</div>');
-  bindCardActions();
+function escapeHtml(value = '') {
+  return String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[ch]));
 }
-function cardHtml(c) {
-  const statusLabels = { open: 'Open', working: 'In progress', ready: 'Ready for review', resolved: 'Resolved' };
-  const st = statusLabels[c.status] || c.status;
-  const replies = c.replies.map(r => `<div class="reply"><div class="avatar">${r.author[0]}</div><div><div class="reply-head">${escapeHtml(r.author)} · ${ago(r.at)}</div><div class="reply-copy">${escapeHtml(r.text)}</div></div></div>`).join('');
-  const location = media.type === 'image' ? (c.pin ? 'Pinned to creative' : 'General') : `At ${fmtTime(c.time)}${c.pin ? ' · pinned' : ''}`;
-  let actions = '';
-  if (state.role === 'creator') {
-    if (c.status === 'open') actions = `<button class="small-btn" data-action="working" data-id="${c.id}">Start work</button><button class="small-btn accent" data-action="ready" data-id="${c.id}">Mark ready</button>`;
-    if (c.status === 'working') actions = `<button class="small-btn accent" data-action="ready" data-id="${c.id}">Mark ready for review</button><button class="small-btn" data-action="reopen" data-id="${c.id}">Back to open</button>`;
-    if (c.status === 'ready') actions = `<button class="small-btn" data-action="working" data-id="${c.id}">Continue working</button>`;
-    if (c.status === 'resolved') actions = `<span class="meta-text">Verified by reviewer</span>`;
-  } else {
-    if (c.status === 'ready') actions = `<button class="small-btn accent" data-action="resolve" data-id="${c.id}">Verify & resolve</button><button class="small-btn" data-action="reopen" data-id="${c.id}">Needs another pass</button>`;
-    else if (c.status !== 'resolved') actions = `<button class="small-btn accent" data-action="resolve" data-id="${c.id}">Resolve</button><button class="small-btn" data-action="reopen" data-id="${c.id}">Keep open</button>`;
-    else actions = `<button class="small-btn" data-action="reopen" data-id="${c.id}">Reopen</button>`;
+
+function formatTime(seconds = 0) {
+  const total = Math.max(0, Math.floor(Number(seconds) || 0));
+  return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
+}
+
+function timeAgo(ts) {
+  const mins = Math.max(0, Math.round((Date.now() - ts) / 60000));
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  return `${Math.round(mins / 60)}h ago`;
+}
+
+function setState(patch) {
+  state = { ...state, ...patch };
+  persist();
+  render();
+}
+
+function resetAll() {
+  mediaUrls.forEach(url => URL.revokeObjectURL(url));
+  mediaUrls = [];
+  mediaDuration = 0;
+  localStorage.removeItem(APP_KEY);
+  state = freshState();
+  render();
+  toast('Fresh workspace ready');
+}
+
+function render() {
+  const app = $('#app');
+  if (!state.review || state.screen === 'home') {
+    app.innerHTML = homeHtml();
+    bindHome();
+    return;
   }
-  return `<article class="feedback-item" data-card-id="${c.id}">
-    <div class="feedback-main">
-      <div class="feedback-top"><div class="feedback-meta"><span class="sev-dot" style="background:${severity[c.severity].color}"></span><span class="meta-text">${severity[c.severity].label}</span><span class="meta-text">· ${escapeHtml(c.category)}</span></div><span class="status-pill status-${c.status}">${st}</span></div>
-      <div class="feedback-copy">${escapeHtml(c.text)}</div>
-      <div class="feedback-location">${location}</div>
-      <div class="item-actions">${actions}<button class="small-btn" data-action="jump" data-id="${c.id}">Jump to</button></div>
+  app.innerHTML = reviewHtml();
+  bindReview();
+  hydrateMedia();
+}
+
+function homeHtml() {
+  return `
+    <div class="home-shell">
+      <header class="home-nav">
+        <a class="wordmark" href="#" aria-label="fidbachr home"><span class="mark">f</span><span>fidbachr</span></a>
+        <div class="nav-actions">
+          <span class="beta-pill">private beta</span>
+          ${state.review ? '<button class="ghost-btn" id="resumeBtn">Resume draft</button>' : ''}
+        </div>
+      </header>
+
+      <main class="onboarding-wrap">
+        <section class="intro-copy">
+          <div class="kicker">CREATIVE REVIEW, WITHOUT THE MESS</div>
+          <h1>What do you want to review?</h1>
+          <p>Upload a creative, leave feedback exactly where it matters, and turn every comment into a change your creator can actually complete.</p>
+        </section>
+
+        <section class="type-grid" aria-label="Choose creative type">
+          <button class="type-card" id="newVideoBtn">
+            <div class="type-icon">▶</div>
+            <div class="type-copy"><h2>Video / Reel</h2><p>Review a reel, ad, short, cut or any browser-playable video.</p></div>
+            <span class="arrow">→</span>
+          </button>
+          <button class="type-card" id="newStaticBtn">
+            <div class="type-icon">▧</div>
+            <div class="type-copy"><h2>Static / Carousel</h2><p>Review one image or upload several images as a carousel.</p></div>
+            <span class="arrow">→</span>
+          </button>
+        </section>
+
+        <section class="how-row">
+          <div><span>1</span><strong>Upload</strong><small>Your file stays in this browser for this prototype.</small></div>
+          <div><span>2</span><strong>Mark feedback</strong><small>Timestamp video or click directly on a static.</small></div>
+          <div><span>3</span><strong>Send changes</strong><small>Creator replies, fixes, and submits work back for verification.</small></div>
+        </section>
+
+        <div class="prototype-note">Zero-day prototype · no account required · no sample data</div>
+      </main>
+    </div>`;
+}
+
+function bindHome() {
+  $('#newVideoBtn')?.addEventListener('click', () => $('#videoPicker').click());
+  $('#newStaticBtn')?.addEventListener('click', () => $('#imagePicker').click());
+  $('#resumeBtn')?.addEventListener('click', () => setState({ screen: 'review' }));
+
+  $('#videoPicker').onchange = (event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    startReview('video', [file]);
+    event.target.value = '';
+  };
+
+  $('#imagePicker').onchange = (event) => {
+    const files = [...(event.target.files || [])];
+    if (!files.length) return;
+    startReview(files.length > 1 ? 'carousel' : 'image', files);
+    event.target.value = '';
+  };
+}
+
+function startReview(type, files) {
+  mediaUrls.forEach(url => URL.revokeObjectURL(url));
+  mediaUrls = files.map(file => URL.createObjectURL(file));
+  const firstName = files[0]?.name || 'Untitled creative';
+  const base = firstName.replace(/\.[^.]+$/, '').replace(/[_-]+/g, ' ');
+  state = {
+    ...freshState(),
+    screen: 'review',
+    review: {
+      id: Date.now(),
+      type,
+      title: base || 'Untitled creative',
+      fileNames: files.map(f => f.name),
+      version: 1,
+      createdAt: Date.now(),
+    },
+  };
+  persist();
+  render();
+}
+
+function reviewHtml() {
+  const count = state.feedback.length;
+  const resolved = state.feedback.filter(item => item.status === 'resolved').length;
+  const needsReview = state.feedback.filter(item => item.status === 'ready').length;
+  const isReviewer = state.role === 'reviewer';
+  const isCarousel = state.review.type === 'carousel';
+  const mediaLabel = state.review.type === 'video' ? 'VIDEO / REEL' : isCarousel ? 'CAROUSEL' : 'STATIC';
+
+  return `
+    <div class="product-shell">
+      <header class="topbar">
+        <button class="wordmark bare" id="homeBtn"><span class="mark">f</span><span>fidbachr</span></button>
+        <div class="review-title-wrap">
+          <span class="crumb">My reviews /</span>
+          <strong>${escapeHtml(state.review.title)}</strong>
+          <span class="version-pill">V${state.review.version}</span>
+        </div>
+        <div class="top-actions">
+          <div class="role-switch">
+            <button class="role-btn ${isReviewer ? 'active' : ''}" data-role="reviewer">Reviewer</button>
+            <button class="role-btn ${!isReviewer ? 'active' : ''}" data-role="creator">Creator preview</button>
+          </div>
+          <button class="ghost-btn" id="startOverBtn">Start over</button>
+          <button class="primary-btn" id="finishBtn">${isReviewer ? 'Finish review' : 'Notify reviewer'}</button>
+        </div>
+      </header>
+
+      ${!state.walkthroughDismissed ? walkthroughHtml(count) : ''}
+
+      <main class="review-layout">
+        <section class="canvas-column">
+          <div class="asset-header">
+            <div><div class="kicker">${mediaLabel}</div><h1>${escapeHtml(state.review.title)}</h1></div>
+            <div class="asset-stats"><span>${resolved}/${count} resolved</span>${needsReview ? `<span class="attention">${needsReview} ready for you</span>` : ''}</div>
+          </div>
+
+          <div class="media-stage ${state.review.type}" id="mediaStage">
+            <div class="media-missing" id="mediaMissing" hidden>
+              <div class="missing-icon">↥</div>
+              <h3>Re-select your file to continue</h3>
+              <p>Files are intentionally not uploaded to a server in this zero-day prototype.</p>
+              <button class="primary-btn" id="reselectBtn">Choose file again</button>
+            </div>
+            <video id="reviewVideo" controls playsinline hidden></video>
+            <img id="reviewImage" alt="Creative being reviewed" hidden />
+            <div class="pin-layer" id="pinLayer"></div>
+          </div>
+
+          ${state.review.type === 'carousel' ? carouselStripHtml() : ''}
+          ${state.review.type === 'video' ? timelineHtml() : ''}
+
+          ${isReviewer ? reviewerComposerHtml() : creatorHelperHtml()}
+        </section>
+
+        <aside class="feedback-rail">
+          <div class="rail-head">
+            <div><div class="kicker">${isReviewer ? 'YOUR REVIEW' : 'CHANGE LIST'}</div><h2>${isReviewer ? 'Feedback' : 'Work to complete'}</h2></div>
+            <span class="count-badge">${count}</span>
+          </div>
+          ${feedbackEmptyOrList()}
+        </aside>
+      </main>
     </div>
-    <div class="thread">${replies || '<div class="meta-text">No replies yet</div>'}
-      <div class="thread-compose"><input data-reply-input="${c.id}" placeholder="Reply in thread…"><button data-action="reply" data-id="${c.id}">Send</button></div>
-    </div>
+
+    <dialog id="finishDialog" class="finish-dialog">
+      <div class="dialog-top"><div><div class="kicker">REVIEW SUMMARY</div><h2>${count ? `${count} change${count === 1 ? '' : 's'} captured` : 'Nothing added yet'}</h2></div><button class="icon-close" id="closeDialog">×</button></div>
+      <div id="finishSummary">${summaryHtml()}</div>
+      <div class="dialog-actions">
+        <button class="ghost-btn" id="copyListBtn">Copy change list</button>
+        <button class="primary-btn" id="simulateSendBtn" ${count ? '' : 'disabled'}>${isReviewer ? 'Send to creator' : 'Notify reviewer'}</button>
+      </div>
+    </dialog>`;
+}
+
+function walkthroughHtml(count) {
+  const step = !mediaUrls.length ? 1 : count === 0 ? 2 : 3;
+  return `
+    <div class="walkthrough">
+      <div class="walk-copy"><span class="walk-badge">FIRST REVIEW</span><strong>${step === 1 ? 'Your creative is ready.' : step === 2 ? 'Now leave your first piece of feedback.' : 'Nice — keep reviewing or finish when you are done.'}</strong><span>${step === 2 ? (state.review.type === 'video' ? 'Play or scrub to the exact moment, then type what should change.' : 'Click anywhere on the creative to pin feedback, then describe the change.') : 'This guide disappears once you are comfortable.'}</span></div>
+      <div class="walk-steps"><span class="${step >= 1 ? 'done' : ''}">1 Upload</span><span class="${step >= 2 ? 'done' : ''}">2 Review</span><span class="${step >= 3 ? 'done' : ''}">3 Send</span></div>
+      <button class="walk-close" id="dismissGuide">Got it</button>
+    </div>`;
+}
+
+function carouselStripHtml() {
+  return `<div class="carousel-strip">${state.review.fileNames.map((name, index) => `<button class="slide-thumb ${index === state.currentSlide ? 'active' : ''}" data-slide="${index}"><span>${index + 1}</span><small>${escapeHtml(name)}</small></button>`).join('')}</div>`;
+}
+
+function timelineHtml() {
+  return `
+    <div class="timeline-block">
+      <div class="timeline-meta"><span id="timeReadout">00:00 / 00:00</span><span>Feedback markers appear here</span></div>
+      <div class="timeline" id="timeline"><div class="timeline-played" id="timelinePlayed"></div><div class="timeline-markers" id="timelineMarkers"></div></div>
+    </div>`;
+}
+
+function reviewerComposerHtml() {
+  const context = state.review.type === 'video'
+    ? `At <strong id="composerTime">00:00</strong>`
+    : state.pendingPin
+      ? `<strong>Pinned</strong> to this creative`
+      : 'General feedback · click the creative to pin it';
+  return `
+    <section class="composer">
+      <div class="composer-context" id="composerContext">${context}</div>
+      <textarea id="feedbackText" placeholder="What should change? Be as natural as you like…"></textarea>
+      <div class="composer-footer">
+        <div class="selects">
+          <select id="severitySelect"><option value="major">Major</option><option value="blocker">Blocker</option><option value="minor">Minor</option><option value="suggestion">Suggestion</option></select>
+          <select id="categorySelect"><option>Editing</option><option>Content</option><option>Design</option><option>Audio</option><option>Branding</option><option>Technical</option></select>
+        </div>
+        <button class="primary-btn" id="addFeedbackBtn">Add feedback</button>
+      </div>
+    </section>`;
+}
+
+function creatorHelperHtml() {
+  return `<section class="creator-helper"><div><div class="kicker">CREATOR PREVIEW</div><strong>This is what the person doing the work sees.</strong><p>Reply to a change, mark it in progress, then submit it back to the reviewer.</p></div><button class="ghost-btn" id="backReviewerBtn">Back to reviewer</button></section>`;
+}
+
+function feedbackEmptyOrList() {
+  if (!state.feedback.length) {
+    return `<div class="rail-empty"><div class="empty-orbit"><span>+</span></div><h3>No feedback yet</h3><p>${state.role === 'reviewer' ? 'Your comments will appear here and automatically become a change list.' : 'The reviewer has not added any changes yet.'}</p><div class="empty-tip">${state.review.type === 'video' ? 'Tip: play the video to the exact moment you want to discuss.' : 'Tip: click directly on the creative to attach feedback to a specific area.'}</div></div>`;
+  }
+  return `<div class="feedback-list">${[...state.feedback].sort((a, b) => a.order - b.order).map(feedbackCardHtml).join('')}</div>`;
+}
+
+function feedbackCardHtml(item) {
+  const meta = severityMap[item.severity];
+  const location = state.review.type === 'video' ? formatTime(item.time) : item.pin ? `Pinned · ${state.review.type === 'carousel' ? `Slide ${(item.slide ?? 0) + 1}` : 'Static'}` : 'General';
+  const statusText = { open: 'Open', working: 'In progress', ready: 'Ready for review', resolved: 'Resolved' }[item.status] || item.status;
+  const replies = item.replies.map(reply => `<div class="reply"><div class="reply-avatar">${escapeHtml(reply.author.slice(0, 1).toUpperCase())}</div><div><div class="reply-meta">${escapeHtml(reply.author)} · ${timeAgo(reply.at)}</div><p>${escapeHtml(reply.text)}</p></div></div>`).join('');
+  let actions = '';
+  if (state.role === 'reviewer') {
+    actions = item.status === 'ready'
+      ? `<button class="small primary-small" data-action="resolve" data-id="${item.id}">Verify & resolve</button><button class="small" data-action="reopen" data-id="${item.id}">Needs another pass</button>`
+      : item.status === 'resolved'
+        ? `<button class="small" data-action="reopen" data-id="${item.id}">Reopen</button>`
+        : `<button class="small" data-action="resolve" data-id="${item.id}">Resolve</button>`;
+  } else {
+    actions = item.status === 'open'
+      ? `<button class="small" data-action="working" data-id="${item.id}">Start work</button><button class="small primary-small" data-action="ready" data-id="${item.id}">Mark ready</button>`
+      : item.status === 'working'
+        ? `<button class="small primary-small" data-action="ready" data-id="${item.id}">Ready for review</button>`
+        : item.status === 'ready'
+          ? `<button class="small" data-action="working" data-id="${item.id}">Continue working</button>`
+          : `<span class="verified-copy">Verified by reviewer</span>`;
+  }
+
+  return `<article class="feedback-card ${item.status === 'resolved' ? 'resolved' : ''}" data-feedback-card="${item.id}">
+    <button class="feedback-jump" data-action="jump" data-id="${item.id}">
+      <div class="feedback-meta"><span class="severity-dot ${meta.tone}"></span><span>${meta.label}</span><span>·</span><span>${escapeHtml(item.category)}</span><span class="status-tag ${item.status}">${statusText}</span></div>
+      <p class="feedback-copy">${escapeHtml(item.text)}</p>
+      <span class="location">${location}</span>
+    </button>
+    <div class="card-actions">${actions}</div>
+    <div class="thread">${replies}<div class="reply-box"><input data-reply="${item.id}" placeholder="Reply…"><button class="small" data-action="reply" data-id="${item.id}">Send</button></div></div>
   </article>`;
 }
-function bindCardActions() {
-  $$('[data-action]').forEach(btn => btn.onclick = () => handleAction(btn.dataset.action, Number(btn.dataset.id)));
-  $$('[data-reply-input]').forEach(inp => inp.onkeydown = e => {
-    if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); handleAction('reply', Number(inp.dataset.replyInput)); }
-  });
+
+function summaryHtml() {
+  if (!state.feedback.length) return '<div class="summary-empty">Add feedback before sending a review.</div>';
+  const groups = ['blocker', 'major', 'minor', 'suggestion'].map(level => ({ level, items: state.feedback.filter(item => item.severity === level && item.status !== 'resolved') })).filter(group => group.items.length);
+  const unresolved = state.feedback.filter(item => item.status !== 'resolved').length;
+  return `<div class="summary-count"><strong>${unresolved}</strong><span>changes still open</span></div>${groups.map(group => `<section class="summary-group"><h3><span class="severity-dot ${severityMap[group.level].tone}"></span>${severityMap[group.level].label} · ${group.items.length}</h3>${group.items.map(item => `<div class="summary-line"><span>${state.review.type === 'video' ? formatTime(item.time) : item.pin ? 'Pinned' : 'General'}</span><p>${escapeHtml(item.text)}</p></div>`).join('')}</section>`).join('')}`;
 }
-function handleAction(action,id) {
-  const c = state.comments.find(x=>x.id===id); if(!c) return;
+
+function bindReview() {
+  $('#homeBtn')?.addEventListener('click', () => setState({ screen: 'home' }));
+  $('#startOverBtn')?.addEventListener('click', resetAll);
+  $('#dismissGuide')?.addEventListener('click', () => setState({ walkthroughDismissed: true }));
+  $('#backReviewerBtn')?.addEventListener('click', () => setState({ role: 'reviewer' }));
+  $$('.role-btn').forEach(btn => btn.addEventListener('click', () => setState({ role: btn.dataset.role })));
+  $('#finishBtn')?.addEventListener('click', () => $('#finishDialog').showModal());
+  $('#closeDialog')?.addEventListener('click', () => $('#finishDialog').close());
+  $('#copyListBtn')?.addEventListener('click', copyChangeList);
+  $('#simulateSendBtn')?.addEventListener('click', () => {
+    $('#finishDialog').close();
+    state.activity.unshift({ type: 'send', at: Date.now() });
+    persist();
+    toast(state.role === 'reviewer' ? 'Creator link simulated — backend comes next' : 'Reviewer notified');
+  });
+  $('#addFeedbackBtn')?.addEventListener('click', addFeedback);
+  $('#reselectBtn')?.addEventListener('click', () => state.review.type === 'video' ? $('#videoPicker').click() : $('#imagePicker').click());
+
+  $('#videoPicker').onchange = (event) => {
+    const file = event.target.files?.[0];
+    if (file) attachFiles([file]);
+    event.target.value = '';
+  };
+  $('#imagePicker').onchange = (event) => {
+    const files = [...(event.target.files || [])];
+    if (files.length) attachFiles(files);
+    event.target.value = '';
+  };
+
+  $$('.slide-thumb').forEach(btn => btn.addEventListener('click', () => {
+    state.currentSlide = Number(btn.dataset.slide);
+    state.pendingPin = null;
+    persist();
+    render();
+  }));
+
+  $$('[data-action]').forEach(btn => btn.addEventListener('click', () => handleFeedbackAction(btn.dataset.action, Number(btn.dataset.id))));
+  $$('[data-reply]').forEach(input => input.addEventListener('keydown', event => {
+    if (event.key === 'Enter') { event.preventDefault(); handleFeedbackAction('reply', Number(input.dataset.reply)); }
+  }));
+}
+
+function attachFiles(files) {
+  mediaUrls.forEach(url => URL.revokeObjectURL(url));
+  mediaUrls = files.map(file => URL.createObjectURL(file));
+  state.review.fileNames = files.map(file => file.name);
+  if (state.review.type !== 'video') state.review.type = files.length > 1 ? 'carousel' : 'image';
+  state.currentSlide = 0;
+  persist();
+  render();
+}
+
+function hydrateMedia() {
+  const missing = $('#mediaMissing');
+  if (!mediaUrls.length) {
+    missing.hidden = false;
+    return;
+  }
+  missing.hidden = true;
+  if (state.review.type === 'video') {
+    const video = $('#reviewVideo');
+    video.hidden = false;
+    video.src = mediaUrls[0];
+    video.addEventListener('loadedmetadata', () => {
+      mediaDuration = video.duration || 0;
+      updateTimeline();
+    });
+    video.addEventListener('timeupdate', () => {
+      updateTimeline();
+      const t = $('#composerTime');
+      if (t) t.textContent = formatTime(video.currentTime);
+    });
+    $('#timeline')?.addEventListener('click', event => {
+      const rect = event.currentTarget.getBoundingClientRect();
+      if (!mediaDuration) return;
+      video.currentTime = Math.max(0, Math.min(mediaDuration, (event.clientX - rect.left) / rect.width * mediaDuration));
+    });
+  } else {
+    const image = $('#reviewImage');
+    image.hidden = false;
+    image.src = mediaUrls[state.currentSlide] || mediaUrls[0];
+    $('#mediaStage').addEventListener('click', event => {
+      if (state.role !== 'reviewer' || event.target.closest('button')) return;
+      const rect = $('#mediaStage').getBoundingClientRect();
+      state.pendingPin = {
+        x: Math.max(0, Math.min(100, (event.clientX - rect.left) / rect.width * 100)),
+        y: Math.max(0, Math.min(100, (event.clientY - rect.top) / rect.height * 100)),
+      };
+      persist();
+      renderPins();
+      const context = $('#composerContext');
+      if (context) context.innerHTML = '<strong>Pinned</strong> to this creative';
+      $('#feedbackText')?.focus();
+    });
+  }
+  renderPins();
+  updateTimeline();
+}
+
+function addFeedback() {
+  const text = $('#feedbackText')?.value.trim();
+  if (!text) { toast('Write the feedback first'); return; }
+  const video = $('#reviewVideo');
+  const item = {
+    id: Date.now(),
+    order: Date.now(),
+    text,
+    severity: $('#severitySelect').value,
+    category: $('#categorySelect').value,
+    time: state.review.type === 'video' ? (video?.currentTime || 0) : 0,
+    slide: state.review.type === 'carousel' ? state.currentSlide : 0,
+    pin: state.review.type === 'video' ? null : state.pendingPin ? { ...state.pendingPin } : null,
+    status: 'open',
+    replies: [],
+  };
+  state.feedback.push(item);
+  state.pendingPin = null;
+  state.activity.unshift({ type: 'feedback', itemId: item.id, at: Date.now() });
+  persist();
+  render();
+  toast('Feedback added');
+}
+
+function handleFeedbackAction(action, id) {
+  const item = state.feedback.find(entry => entry.id === id);
+  if (!item) return;
   if (action === 'jump') {
-    if (media.type === 'video') { $('#video').currentTime = c.time; $('#video').pause(); }
-    document.querySelector(`[data-card-id="${id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'});
-    renderPins(); return;
+    if (state.review.type === 'video') {
+      const video = $('#reviewVideo');
+      if (video) { video.currentTime = item.time; video.pause(); }
+    } else if (state.review.type === 'carousel' && state.currentSlide !== item.slide) {
+      state.currentSlide = item.slide || 0;
+      persist();
+      render();
+      return;
+    }
+    document.querySelector(`[data-feedback-card="${id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    renderPins(id);
+    return;
   }
   if (action === 'reply') {
-    const inp = document.querySelector(`[data-reply-input="${id}"]`);
-    const text = inp?.value.trim(); if(!text) return;
-    const author = state.role === 'reviewer' ? 'Rohan' : 'Creator';
-    c.replies.push({author, role:state.role, text, at:Date.now()});
-    addActivity('💬', `<b>${author}</b> replied: “${escapeHtml(text.slice(0,45))}${text.length>45?'…':''}”`);
-    save(); renderFeedback(); return;
+    const input = document.querySelector(`[data-reply="${id}"]`);
+    const text = input?.value.trim();
+    if (!text) return;
+    item.replies.push({ author: state.role === 'reviewer' ? 'Reviewer' : 'Creator', role: state.role, text, at: Date.now() });
+    state.activity.unshift({ type: 'reply', itemId: id, at: Date.now() });
+  } else if (action === 'working') {
+    item.status = 'working';
+  } else if (action === 'ready') {
+    item.status = 'ready';
+    toast('Marked ready for reviewer');
+  } else if (action === 'resolve') {
+    item.status = 'resolved';
+    toast('Resolved');
+  } else if (action === 'reopen') {
+    item.status = 'open';
   }
-  if (action === 'working') {
-    c.status='working'; addActivity('●', `<b>Creator</b> started work on “${escapeHtml(c.text.slice(0,46))}${c.text.length>46?'…':''}”.`); toast('Marked in progress');
-  }
-  if (action === 'ready') {
-    c.status='ready'; addActivity('↻', `<b>Creator</b> marked “${escapeHtml(c.text.slice(0,46))}${c.text.length>46?'…':''}” ready for review.`); toast('Reviewer notified');
-  }
-  if (action === 'resolve') {
-    c.status='resolved'; addActivity('✓', `<b>Rohan</b> resolved “${escapeHtml(c.text.slice(0,46))}${c.text.length>46?'…':''}”.`); toast('Feedback resolved');
-  }
-  if (action === 'reopen') {
-    c.status='open'; addActivity('↺', `<b>${state.role === 'reviewer' ? 'Rohan' : 'Creator'}</b> moved a feedback item back to open.`);
-  }
-  save(); renderAll();
-}
-function renderChecklist() {
-  const sorted = [...state.comments].sort((a,b) => {
-    const rank={blocker:0,major:1,minor:2,suggestion:3}; return rank[a.severity]-rank[b.severity] || a.time-b.time;
-  });
-  $('#checklist').innerHTML = sorted.length ? sorted.map(c => `<div class="check-row">
-    <button class="check-circle ${c.status==='resolved'?'done':''}" data-check-id="${c.id}" title="${state.role==='reviewer'?'Toggle resolved':'Open feedback item'}">${c.status==='resolved'?'✓':''}</button>
-    <div><div class="check-copy">${escapeHtml(c.text)}</div><div class="check-sub"><span style="color:${severity[c.severity].color}">${severity[c.severity].label}</span> · ${escapeHtml(c.category)} · ${fmtTime(c.time)}</div></div>
-    <span class="status-pill status-${c.status}">${c.status==='ready'?'Ready':c.status==='working'?'Working':c.status}</span>
-  </div>`).join('') : '<div class="empty-list">Add feedback and it will become a change checklist automatically.</div>';
-  $$('[data-check-id]').forEach(btn => btn.onclick = () => {
-    const id = Number(btn.dataset.checkId);
-    if (state.role === 'reviewer') {
-      const c = state.comments.find(x => x.id === id);
-      handleAction(c?.status === 'resolved' ? 'reopen' : 'resolve', id);
-    } else {
-      setTab('feedback');
-      setTimeout(() => document.querySelector(`[data-card-id="${id}"]`)?.scrollIntoView({behavior:'smooth',block:'center'}), 0);
-    }
-  });
-}
-function renderActivity() {
-  $('#activityList').innerHTML = state.activity.length ? state.activity.map(a => `<div class="activity-row"><div class="activity-icon">${a.icon}</div><div><div class="activity-copy">${a.copy}</div><div class="activity-time">${ago(a.at)}</div></div></div>`).join('') : '<div class="empty-list">No activity yet.</div>';
-}
-function updateProgress() {
-  const total=state.comments.length, resolved=state.comments.filter(c=>c.status==='resolved').length;
-  $('#progressText').textContent=`${resolved} of ${total} resolved`;
-  $('#progressFill').style.width=total?`${resolved/total*100}%`:'0%';
-}
-function renderTimeline() {
-  const duration=currentDuration();
-  $('#timelineMarkers').innerHTML = state.comments.map(c => {
-    const left = media.type === 'video' ? Math.min(100,c.time/duration*100) : 0;
-    return `<button class="t-marker" data-tid="${c.id}" title="${escapeHtml(c.text)}" style="left:${left}%;background:${severity[c.severity].color}"></button>`;
-  }).join('');
-  $$('[data-tid]').forEach(m=>m.onclick=e=>{e.stopPropagation();handleAction('jump',Number(m.dataset.tid));});
-}
-function renderPins() {
-  const layer=$('#pinLayer');
-  layer.classList.toggle('pin-mode', state.pinMode);
-  const pins=state.comments.filter(c=>c.pin && c.status!=='resolved');
-  layer.innerHTML=pins.map((c,i)=>`<button class="pin" data-pin-id="${c.id}" style="left:${c.pin.x}%;top:${c.pin.y}%;background:${severity[c.severity].color}">${i+1}</button>`).join('') + (state.pendingPin ? `<div class="pin" style="left:${state.pendingPin.x}%;top:${state.pendingPin.y}%;background:#b8f46c">+</div>`:'');
-  $$('[data-pin-id]').forEach(p=>p.onclick=e=>{e.stopPropagation();handleAction('jump',Number(p.dataset.pinId));});
-}
-function updateContext() {
-  const t=currentTime();
-  $('#contextChip').textContent = `${media.type==='image'?'Image':`At ${fmtTime(t)}`}${state.pendingPin?' · pinned':''}`;
-  $('#clearPinBtn').hidden=!state.pendingPin;
-}
-function addFeedback() {
-  if (state.role !== 'reviewer') { toast('Creators reply inside feedback threads'); return; }
-  const text=$('#feedbackInput').value.trim(); if(!text){toast('Write feedback first');return;}
-  const c={ id:Date.now(), text, severity:$('#severitySelect').value, category:$('#categorySelect').value, time:currentTime(), status:'open', pin:state.pendingPin, replies:[] };
-  state.comments.push(c); state.pendingPin=null; $('#feedbackInput').value='';
-  addActivity('＋', `<b>Rohan</b> added ${severity[c.severity].label.toLowerCase()} ${escapeHtml(c.category.toLowerCase())} feedback.`);
-  save(); updateContext(); renderAll(); toast('Feedback added');
-}
-function setTab(name) {
-  $$('.tab').forEach(t=>t.classList.toggle('active',t.dataset.tab===name));
-  $$('.tab-panel').forEach(p=>p.classList.remove('active'));
-  $(`#${name}Panel`).classList.add('active');
-  if(name==='activity'){state.unread=0;save();updateBadge();}
-}
-function checklistText() {
-  return state.comments.filter(c=>c.status!=='resolved').sort((a,b)=>a.time-b.time).map(c=>`[${severity[c.severity].label}] ${c.category} ${fmtTime(c.time)} — ${c.text}`).join('\n');
-}
-function showSummary() {
-  const cs=counts(); const open=state.comments.filter(c=>c.status!=='resolved');
-  $('#dialogSummary').innerHTML=`<div class="dialog-statline">${['blocker','major','minor','suggestion'].map(k=>`<div class="dialog-stat"><strong style="color:${severity[k].color}">${cs[k]}</strong><span>${severity[k].label}</span></div>`).join('')}</div>
-    <ol class="dialog-list">${open.map(c=>`<li><b>${severity[c.severity].label}</b> · ${escapeHtml(c.category)} · ${fmtTime(c.time)} — ${escapeHtml(c.text)}</li>`).join('') || '<li>Everything is resolved.</li>'}</ol>`;
-  $('#summaryDialog').showModal();
+  persist();
+  render();
 }
 
-$('#fileInput').addEventListener('change', e => {
-  const f=e.target.files?.[0]; if(!f)return; const url=URL.createObjectURL(f);
-  $('#emptyState').hidden=true;
-  if(f.type.startsWith('video/')){
-    media.type='video'; $('#image').hidden=true; const v=$('#video'); v.hidden=false; v.src=url;
-    v.onloadedmetadata=()=>{media.duration=v.duration||30;renderTimeline();updateContext();};
-    v.ontimeupdate=()=>{ const d=v.duration||1; $('#timeLabel').textContent=`${fmtTime(v.currentTime)} / ${fmtTime(d)}`; $('#timelineProgress').style.width=`${v.currentTime/d*100}%`; updateContext();};
-  } else {
-    media.type='image'; $('#video').hidden=true; const img=$('#image'); img.hidden=false; img.src=url; $('#timeLabel').textContent='Image review'; renderTimeline(); updateContext();
-  }
-  toast(`${f.name} loaded locally`);
-});
-$('#timeline').onclick=e=>{
-  if(media.type!=='video')return; const r=e.currentTarget.getBoundingClientRect(); const ratio=(e.clientX-r.left)/r.width; $('#video').currentTime=ratio*currentDuration();
-};
-$('#pinModeBtn').onclick=()=>{state.pinMode=!state.pinMode;$('#pinModeBtn').textContent=state.pinMode?'✕ Exit pin mode':'⌖ Pin feedback';renderPins();toast(state.pinMode?'Click the creative to place a pin':'Pin mode off');};
-$('#pinLayer').onclick=e=>{
-  if(!state.pinMode)return; const r=e.currentTarget.getBoundingClientRect(); state.pendingPin={x:((e.clientX-r.left)/r.width*100).toFixed(2),y:((e.clientY-r.top)/r.height*100).toFixed(2)}; state.pinMode=false; $('#pinModeBtn').textContent='⌖ Pin feedback'; updateContext();renderPins();$('#feedbackInput').focus();
-};
-$('#clearPinBtn').onclick=()=>{state.pendingPin=null;updateContext();renderPins();};
-$('#addFeedbackBtn').onclick=addFeedback;
-$('#feedbackInput').onkeydown=e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter')addFeedback();};
-$('#statusFilter').onchange=renderFeedback; $('#categoryFilter').onchange=renderFeedback;
-$$('.role-btn').forEach(b=>b.onclick=()=>{state.role=b.dataset.role;save();renderAll();toast(`${state.role==='reviewer'?'Reviewer':'Creator'} mode`);});
-$$('.tab').forEach(t=>t.onclick=()=>setTab(t.dataset.tab));
-$('#activityBtn').onclick=()=>setTab('activity');
-$('#finishBtn').onclick=()=> state.role==='reviewer' ? showSummary() : (toast('Reviewer pinged'), addActivity('↻','<b>Creator</b> pinged the reviewer to check submitted fixes.'));
-$('#closeDialogBtn').onclick=()=>$('#summaryDialog').close();
-$('#copyChecklistBtn').onclick=async()=>{await navigator.clipboard.writeText(checklistText());toast('Checklist copied');};
-$('#copySummaryBtn').onclick=async()=>{await navigator.clipboard.writeText(checklistText());toast('Change list copied');};
-$('#sendCreatorBtn').onclick=()=>{$('#summaryDialog').close();addActivity('✉','<b>Rohan</b> sent the change list to the creator.');toast('Creator notified');};
-$('#shareBtn').onclick=async()=>{try{await navigator.clipboard.writeText(location.href);toast('Review link copied');}catch{toast('Share link ready');}};
-$('#micBtn').onclick=()=>toast('Voice capture comes in Loop 2 — this button is intentionally placed now.');
+function renderPins(highlightId = null) {
+  const layer = $('#pinLayer');
+  if (!layer || state.review.type === 'video') return;
+  const relevant = state.feedback.filter(item => item.pin && (state.review.type !== 'carousel' || item.slide === state.currentSlide));
+  layer.innerHTML = relevant.map((item, index) => `<button class="pin ${item.id === highlightId ? 'pulse' : ''}" data-pin-jump="${item.id}" style="left:${item.pin.x}%;top:${item.pin.y}%">${index + 1}</button>`).join('') + (state.pendingPin ? `<div class="pin pending" style="left:${state.pendingPin.x}%;top:${state.pendingPin.y}%">+</div>` : '');
+  $$('[data-pin-jump]', layer).forEach(btn => btn.addEventListener('click', event => { event.stopPropagation(); handleFeedbackAction('jump', Number(btn.dataset.pinJump)); }));
+}
 
-renderAll(); updateContext();
+function updateTimeline() {
+  if (state.review?.type !== 'video') return;
+  const video = $('#reviewVideo');
+  const duration = video?.duration || mediaDuration || 0;
+  const current = video?.currentTime || 0;
+  const readout = $('#timeReadout');
+  if (readout) readout.textContent = `${formatTime(current)} / ${formatTime(duration)}`;
+  const played = $('#timelinePlayed');
+  if (played) played.style.width = duration ? `${current / duration * 100}%` : '0%';
+  const markers = $('#timelineMarkers');
+  if (markers) {
+    markers.innerHTML = state.feedback.map(item => `<button class="timeline-dot ${severityMap[item.severity].tone}" data-marker="${item.id}" style="left:${duration ? Math.min(100, item.time / duration * 100) : 0}%" title="${escapeHtml(item.text)}"></button>`).join('');
+    $$('[data-marker]', markers).forEach(btn => btn.addEventListener('click', event => { event.stopPropagation(); handleFeedbackAction('jump', Number(btn.dataset.marker)); }));
+  }
+}
+
+async function copyChangeList() {
+  const lines = state.feedback.map((item, index) => `${index + 1}. [${severityMap[item.severity].label}] ${item.category} — ${state.review.type === 'video' ? formatTime(item.time) : item.pin ? 'Pinned' : 'General'} — ${item.text}`);
+  try {
+    await navigator.clipboard.writeText(lines.join('\n'));
+    toast('Change list copied');
+  } catch (_) {
+    toast('Copy was blocked by the browser');
+  }
+}
+
+render();
