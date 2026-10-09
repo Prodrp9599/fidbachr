@@ -45,6 +45,10 @@
     return { left, top, width, height, right: left + width, bottom: top + height };
   }
 
+  function pointInside(rect, x, y) {
+    return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom;
+  }
+
   function adjustAnnotationLayer() {
     const stage = getStage();
     const video = getVideo();
@@ -153,7 +157,6 @@
     video.addEventListener('loadeddata', adjust);
     video.addEventListener('play', adjust);
     video.addEventListener('pause', adjust);
-    video.addEventListener('timeupdate', adjust);
     adjust();
   }
 
@@ -216,12 +219,10 @@
     const stage = getStage();
     if (!video || !stage || video.hidden || !stage.contains(event.target)) return;
 
-    // Saved marks, annotation controls, native controls and gutters own their clicks.
     if (event.target.closest('.v2-radial,.v2-note,.v2-saved-mark,.v3-gutter,button,input,textarea,select')) return;
 
-    // While playing, clicking the visible video body should pause it.
-    // When paused, the annotation layer owns clicks inside actual video content.
-    if (!video.paused && event.target === video) {
+    // Native controls are in the bottom strip. Only hijack clicks inside the displayed picture.
+    if (!video.paused && event.target === video && pointInside(displayedContentRect(video), event.clientX, event.clientY)) {
       event.preventDefault();
       togglePlayback();
     }
