@@ -6,11 +6,12 @@
   <meta name="color-scheme" content="dark" />
   <title>fidbachr — video review</title>
   <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="beta.css" />
 </head>
 <body>
   <div id="app"></div>
-  <input id="videoPicker" type="file" accept="video/*" hidden>
+  <input id="videoPicker" type="file" accept="video/mp4,video/webm,video/quicktime,video/*" hidden>
   <div id="toast" class="toast"></div>
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>
