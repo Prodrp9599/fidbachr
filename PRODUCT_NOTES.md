@@ -17,15 +17,17 @@ This prevents creators checking off their own work before the reviewer verifies 
 ## Roles and anti-gaming model
 
 ### Guest reviewer — free
-Can open a shared review, comment/annotate, reply and approve where invited. Review-only activity should never consume a paid seat.
+Can open a shared review, comment/annotate, reply as a reviewer and approve where invited. Review-only activity should never consume a paid seat.
 
 ### Workspace manager — paid
 Can create projects, upload initial assets, invite people, manage versions, control permissions, see the dashboard and access workspace-level reporting/AI.
 
 ### Active creator — metered paid capacity
-A creator can reply, move production statuses, upload revisions and submit fixes for verification.
+Creator permission is project-scoped. A creator can reply as the assigned creator, move production statuses, upload revisions and submit fixes for verification.
 
-To prevent one cheap workspace becoming a free 30-person production account, creator capacity is measured monthly. A creator counts as active only after a production action, such as uploading a revision or submitting feedback items as ready for review. Merely reviewing/commenting does not count.
+To prevent one cheap workspace becoming a free 30-person production account, creator capacity is measured monthly. An identity counts as active when it performs its first creator-side action in that workspace during the billing month, including a creator reply, moving work to In progress/Ready, or uploading a revision. Review-only activity never counts.
+
+Removing, renaming or re-inviting the same verified creator does not reset that month's activation. The activation ledger is enforced server-side.
 
 Proposed included active creators:
 
