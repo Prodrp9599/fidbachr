@@ -25,7 +25,7 @@ Can, when invited:
 - Open the review link
 - View permitted asset/version
 - Leave formal feedback and annotations
-- Reply in threads
+- Reply as a reviewer
 - Set severity/category when allowed
 - Approve/reject when the review owner allows it
 
@@ -44,7 +44,7 @@ Creator access is project-scoped production access.
 
 Can, for assigned reviews only:
 - View requested changes
-- Reply and ask questions
+- Reply and ask questions as the assigned creator
 - Move assigned feedback Open → In progress → Ready for review
 - Upload a revision when permitted
 - Notify the reviewer that fixes are ready
@@ -57,9 +57,10 @@ Cannot:
 
 ## 4. Active creator metering
 
-A creator becomes an **active creator for that workspace and billing month** when they perform the first qualifying production action.
+A creator becomes an **active creator for that workspace and billing month** when an identity with Creator permission performs its first creator-side action.
 
 Qualifying actions:
+- Replying or asking a question in Creator role
 - Uploading a revision
 - Moving an item to In progress
 - Submitting an item Ready for review
@@ -69,18 +70,19 @@ Non-qualifying actions:
 - Viewing
 - Review-only comments
 - Reviewer annotations
-- Replies that do not move production state
+- Replies made only with Reviewer permission
 
 The backend stores an immutable monthly activation ledger keyed to `workspace_id + creator_identity_id + billing_period`.
 
-Removing, renaming or re-inviting the same verified identity does **not** erase that month's activation. This prevents invite cycling to evade limits.
+Removing, renaming, downgrading and re-inviting the same verified identity does **not** erase that month's activation. This prevents invite cycling or temporary role changes from evading limits.
 
 ## 5. Identity rules
 
 - Review links may be frictionless for review-only participation.
-- Production actions require a verified identity (email magic link/OAuth or an equivalent secure identity).
+- Creator-side actions require a verified identity (email magic link/OAuth or an equivalent secure identity).
 - Project creator permissions are explicit grants, not inferred from possession of a generic review URL.
 - Share tokens are scoped, revocable and expire/rotate where appropriate.
+- The same identity may be a Reviewer on one project and a Creator on another; creator metering starts only when that identity performs a creator-side action in that workspace.
 
 ## 6. Plan entitlement hypothesis
 
